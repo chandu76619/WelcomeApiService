@@ -1,9 +1,7 @@
-name: Build and Test Maven Project
+name: Build, Test and Deploy Maven Project
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
     branches: [ "main" ]
 
 jobs:
@@ -23,9 +21,19 @@ jobs:
     - name: Build with Maven
       run: mvn clean package -DskipTests
 
-    - name: Upload JAR file
-      uses: actions/upload-artifact@v4
-      with:
-        name: WelcomeApiService
-        path: target/*.jar
+    - name: Deploy to EC2
+      env:
+        HOST: ${{ secrets.EC2_HOST }}
+        KEY: ${{ secrets.EC2_SSH_KEY }}
+      run: |
+        echo "$KEY" > key.pem
+        chmod 600 key.pem
 
+        # Copy JAR file to EC2
+        scp -o StrictHostKeyChecking=no -i key.pem target/*.jar ec2-user@$HOST:/home/ec2-user/
+
+        # SSH into EC2 and restart the app
+        ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
+        pkill -f 'WelcomeApiService' || true
+        nohup java -jar /home/ec2-user/WelcomeApiService-0.0.1-SNAPSHOT.jar > app.log 2>&1 &
+        EOF
