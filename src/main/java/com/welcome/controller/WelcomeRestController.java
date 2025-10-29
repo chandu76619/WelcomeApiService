@@ -16,11 +16,12 @@ public class WelcomeRestController {
 
 		String port = env.getProperty("server.port");
 
-		String msg = "Welcome to Accelgrowth Techn(" + port + ")";
+		String msg = "Welcome to Accelgrowth Technology(" + port + ")";
 
 		return msg;
 	}
 
 }
+
 
 
