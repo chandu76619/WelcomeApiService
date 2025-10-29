@@ -51,10 +51,7 @@ jobs:
           sudo usermod -aG docker ec2-user
         fi
 
-        echo "----- Loading Docker image -----"
-        sudo docker load -i /home/ec2-user/welcomeapi.tar
-
-        echo "----- Checking and removing old container -----"
+        echo "----- Stop and remove existing container -----"
         if [ "$(sudo docker ps -aq -f name=welcomeapi1)" ]; then
           echo "Stopping old container..."
           sudo docker stop welcomeapi1 || true
@@ -62,10 +59,17 @@ jobs:
           sudo docker rm welcomeapi1 || true
         fi
 
-        echo "----- Running new container -----"
-        sudo docker run -d -p 8080:8080 --name welcomeapi1 welcomeapi:latest
+        echo "----- Remove old unused images -----"
+        sudo docker image prune -f
+        sudo docker container prune -f
 
-        echo "----- Cleaning up old image tar -----"
+        echo "----- Load new Docker image -----"
+        sudo docker load -i /home/ec2-user/welcomeapi.tar
+
+        echo "----- Run new container -----"
+        sudo docker run -d -p 8080:8082 --name welcomeapi1 welcomeapi:latest
+
+        echo "----- Clean up transferred tar file -----"
         rm -f /home/ec2-user/welcomeapi.tar
 
         echo "----- Deployment Completed Successfully! -----"
