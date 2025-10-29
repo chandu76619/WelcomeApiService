@@ -9,27 +9,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # ✅ 1. Checkout your code
     - name: Checkout Repository
       uses: actions/checkout@v4
 
+    # ✅ 2. Set up JDK 17
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Clean and Build with Maven (force rebuild)
+    # ✅ 3. Clean and Build Maven project
+    - name: Clean and Build with Maven
       run: |
         mvn clean
         mvn package -DskipTests
 
+    # ✅ 4. Build Docker image (force rebuild, ignore cache)
     - name: Build Docker Image (no cache)
       run: |
         docker build --no-cache -t welcomeapi:latest .
 
+    # ✅ 5. Save Docker image as a tar file for transfer
     - name: Save Docker Image as tar
       run: docker save welcomeapi:latest -o welcomeapi.tar
 
+    # ✅ 6. Deploy to EC2 instance
     - name: Deploy to EC2 and Run Container
       env:
         HOST: ${{ secrets.EC2_HOST }}
@@ -38,10 +44,10 @@ jobs:
         echo "$KEY" > key.pem
         chmod 600 key.pem
 
-        echo "Transferring Docker image to EC2..."
+        echo "----- Transferring Docker image to EC2 -----"
         scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
 
-        echo "Connecting to EC2 and deploying..."
+        echo "----- Connecting to EC2 and deploying -----"
         ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
         set -e
 
@@ -54,23 +60,25 @@ jobs:
           sudo usermod -aG docker ec2-user
         fi
 
-        echo "----- Stop and remove existing container -----"
+        echo "----- Stop and remove existing container if any -----"
         if [ "$(sudo docker ps -aq -f name=welcomeapi1)" ]; then
+          echo "Stopping old container..."
           sudo docker stop welcomeapi1 || true
+          echo "Removing old container..."
           sudo docker rm welcomeapi1 || true
         fi
 
-        echo "----- Remove old images and containers -----"
+        echo "----- Clean up old images and containers -----"
         sudo docker system prune -af
 
         echo "----- Load new Docker image -----"
         sudo docker load -i /home/ec2-user/welcomeapi.tar
 
-        echo "----- Run new container -----"
-        sudo docker run -d -p 8080:8082 --name welcomeapi1 welcomeapi:latest
+        echo "----- Run new container with updated code -----"
+        sudo docker run -d -p 8082:8080 --name welcomeapi1 welcomeapi:latest
 
-        echo "----- Clean up transferred tar file -----"
+        echo "----- Remove the transferred tar file -----"
         rm -f /home/ec2-user/welcomeapi.tar
 
-        echo "----- Deployment Completed Successfully! -----"
+        echo "----- Deployment Completed Successfully! 🚀 -----"
         EOF
