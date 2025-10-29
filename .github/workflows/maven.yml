@@ -42,9 +42,8 @@ jobs:
         ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
         set -e
 
-        # Install Docker if not present
+        echo "----- Installing Docker if not already installed -----"
         if ! command -v docker &> /dev/null; then
-          echo "Installing Docker..."
           sudo dnf update -y
           sudo dnf install -y docker
           sudo systemctl enable docker
@@ -52,24 +51,22 @@ jobs:
           sudo usermod -aG docker ec2-user
         fi
 
-        echo "Loading Docker image..."
+        echo "----- Loading Docker image -----"
         sudo docker load -i /home/ec2-user/welcomeapi.tar
 
-        echo "Stopping old container if running..."
-        if [ "$(sudo docker ps -q -f name=welcomeapi1)" ]; then
-          sudo docker stop welcomeapi1
-        fi
-
-        echo "Removing old container if exists..."
+        echo "----- Checking and removing old container -----"
         if [ "$(sudo docker ps -aq -f name=welcomeapi1)" ]; then
-          sudo docker rm welcomeapi1
+          echo "Stopping old container..."
+          sudo docker stop welcomeapi1 || true
+          echo "Removing old container..."
+          sudo docker rm welcomeapi1 || true
         fi
 
-        echo "Running new container..."
-        sudo docker run -d -p 8080:8082 --name welcomeapi1 welcomeapi:latest
+        echo "----- Running new container -----"
+        sudo docker run -d -p 8080:8080 --name welcomeapi1 welcomeapi:latest
 
-        echo "Cleaning up..."
+        echo "----- Cleaning up old image tar -----"
         rm -f /home/ec2-user/welcomeapi.tar
 
-        echo "Deployment completed successfully!"
+        echo "----- Deployment Completed Successfully! -----"
         EOF
