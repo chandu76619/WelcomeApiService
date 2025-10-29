@@ -1,4 +1,4 @@
-name: Build, Test, and Deploy Maven Project (Dockerized)
+name: Build, Test, and Deploy to Two EC2 Instances (Dockerized)
 
 on:
   push:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 🧩 Step 1: Checkout source code
+    # 🧩 Step 1: Checkout repository
     - name: Checkout Repository
       uses: actions/checkout@v4
 
@@ -20,69 +20,110 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    # 🧩 Step 3: Clean and Build with Maven (force new JAR)
+    # 🧩 Step 3: Clean and build with Maven
     - name: Clean and Build with Maven
       run: |
         mvn clean
         mvn package -DskipTests
 
-    # 🧩 Step 4: Force rebuild Docker image (no cache)
+    # 🧩 Step 4: Build Docker image (no cache)
     - name: Build Docker Image (force rebuild)
       run: docker build --no-cache -t welcomeapi:latest .
 
-    # 🧩 Step 5: Save Docker image as tar for EC2 transfer
+    # 🧩 Step 5: Save Docker image as tar file
     - name: Save Docker Image as tar
       run: docker save welcomeapi:latest -o welcomeapi.tar
 
-    # 🧩 Step 6: Deploy to EC2
-    - name: Deploy to EC2 and Run Container
+    # 🧩 Step 6: Deploy to EC2 Instance 1
+    - name: Deploy to EC2 Instance 1 (welcomeapi1)
       env:
-        HOST: ${{ secrets.EC2_HOST }}
-        KEY: ${{ secrets.EC2_SSH_KEY }}
+        HOST: ${{ secrets.EC2_HOST_1 }}
+        KEY: ${{ secrets.EC2_SSH_KEY_1 }}
       run: |
         echo "$KEY" > key.pem
         chmod 600 key.pem
 
-        echo "----- 📦 Transferring Docker image to EC2 -----"
+        echo "----- 📦 Transferring Docker image to EC2 #1 -----"
         scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
 
-        echo "----- 🔐 Connecting to EC2 and deploying -----"
+        echo "----- 🔐 Connecting to EC2 #1 and deploying -----"
         ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
         set -e
+        echo "===== 🚀 Deploying on EC2 Instance 1 ====="
 
-        echo "===== 🚀 Starting EC2 Deployment ====="
-
-        # 🐳 Ensure Docker installed
+        # 🐳 Ensure Docker is installed
         if ! command -v docker &> /dev/null; then
-          echo "Installing Docker..."
           sudo dnf update -y
           sudo dnf install -y docker
           sudo systemctl enable docker
           sudo systemctl start docker
           sudo usermod -aG docker ec2-user
+        else
+          sudo systemctl start docker
         fi
 
-        # 🧹 Stop and remove old container if exists
+        # 🧹 Stop and remove old container
         if [ "$(sudo docker ps -aq -f name=welcomeapi1)" ]; then
-          echo "Stopping old container..."
           sudo docker stop welcomeapi1 || true
-          echo "Removing old container..."
           sudo docker rm welcomeapi1 || true
         fi
 
-        # 🧽 Remove old images to avoid cache reuse
-        echo "Removing old images..."
-        sudo docker rmi $(sudo docker images -q) || true
+        # 🧽 Cleanup old Docker data
+        sudo docker system prune -af || true
 
-        # 📦 Load and run new image
-        echo "Loading new Docker image..."
+        # 📦 Load new image
         sudo docker load -i /home/ec2-user/welcomeapi.tar
 
-        echo "Starting new container..."
+        # 🏃 Run new container on port 8080→8082
         sudo docker run -d -p 8080:8082 --name welcomeapi1 welcomeapi:latest
 
-        echo "Cleaning up tar file..."
         rm -f /home/ec2-user/welcomeapi.tar
+        echo "===== ✅ EC2 Instance 1 Deployed Successfully ====="
+        EOF
 
-        echo "===== ✅ Deployment Completed Successfully! ====="
+    # 🧩 Step 7: Deploy to EC2 Instance 2
+    - name: Deploy to EC2 Instance 2 (welcomeapi2)
+      env:
+        HOST: ${{ secrets.EC2_HOST_2 }}
+        KEY: ${{ secrets.EC2_SSH_KEY_2 }}
+      run: |
+        echo "$KEY" > key2.pem
+        chmod 600 key2.pem
+
+        echo "----- 📦 Transferring Docker image to EC2 #2 -----"
+        scp -o StrictHostKeyChecking=no -i key2.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
+
+        echo "----- 🔐 Connecting to EC2 #2 and deploying -----"
+        ssh -o StrictHostKeyChecking=no -i key2.pem ec2-user@$HOST << 'EOF'
+        set -e
+        echo "===== 🚀 Deploying on EC2 Instance 2 ====="
+
+        # 🐳 Ensure Docker is installed
+        if ! command -v docker &> /dev/null; then
+          sudo dnf update -y
+          sudo dnf install -y docker
+          sudo systemctl enable docker
+          sudo systemctl start docker
+          sudo usermod -aG docker ec2-user
+        else
+          sudo systemctl start docker
+        fi
+
+        # 🧹 Stop and remove old container
+        if [ "$(sudo docker ps -aq -f name=welcomeapi2)" ]; then
+          sudo docker stop welcomeapi2 || true
+          sudo docker rm welcomeapi2 || true
+        fi
+
+        # 🧽 Cleanup old Docker data
+        sudo docker system prune -af || true
+
+        # 📦 Load new image
+        sudo docker load -i /home/ec2-user/welcomeapi.tar
+
+        # 🏃 Run new container on port 8081→8082
+        sudo docker run -d -p 8081:8082 --name welcomeapi2 welcomeapi:latest
+
+        rm -f /home/ec2-user/welcomeapi.tar
+        echo "===== ✅ EC2 Instance 2 Deployed Successfully ====="
         EOF
