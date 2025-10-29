@@ -37,8 +37,8 @@ jobs:
     # 🧩 Step 6: Deploy to EC2 Instance 1
     - name: Deploy to EC2 Instance 1 (welcomeapi1)
       env:
-        HOST: ${{ secrets.EC2_HOST_1 }}
-        KEY: ${{ secrets.EC2_SSH_KEY_1 }}
+        HOST: ${{ secrets.EC2_HOST }}
+        KEY: ${{ secrets.EC2_SSH_KEY }}
       run: |
         echo "$KEY" > key.pem
         chmod 600 key.pem
