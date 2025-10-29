@@ -18,11 +18,14 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Build with Maven
-      run: mvn clean package -DskipTests
+    - name: Clean and Build with Maven (force rebuild)
+      run: |
+        mvn clean
+        mvn package -DskipTests
 
-    - name: Build Docker Image
-      run: docker build -t welcomeapi:latest .
+    - name: Build Docker Image (no cache)
+      run: |
+        docker build --no-cache -t welcomeapi:latest .
 
     - name: Save Docker Image as tar
       run: docker save welcomeapi:latest -o welcomeapi.tar
@@ -53,15 +56,12 @@ jobs:
 
         echo "----- Stop and remove existing container -----"
         if [ "$(sudo docker ps -aq -f name=welcomeapi1)" ]; then
-          echo "Stopping old container..."
           sudo docker stop welcomeapi1 || true
-          echo "Removing old container..."
           sudo docker rm welcomeapi1 || true
         fi
 
-        echo "----- Remove old unused images -----"
-        sudo docker image prune -f
-        sudo docker container prune -f
+        echo "----- Remove old images and containers -----"
+        sudo docker system prune -af
 
         echo "----- Load new Docker image -----"
         sudo docker load -i /home/ec2-user/welcomeapi.tar
