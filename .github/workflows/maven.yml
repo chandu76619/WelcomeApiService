@@ -1,4 +1,4 @@
-name: Build, Test, and Deploy to Two EC2 Instances (Dockerized)
+name: Build, Test, and Deploy to Kubernetes on EC2
 
 on:
   push:
@@ -26,104 +26,51 @@ jobs:
         mvn clean
         mvn package -DskipTests
 
-    # 🧩 Step 4: Build Docker image (no cache)
-    - name: Build Docker Image (force rebuild)
-      run: docker build --no-cache -t welcomeapi:latest .
+    # 🧩 Step 4: Build Docker image
+    - name: Build Docker Image
+      run: docker build -t welcomeapi:latest .
 
-    # 🧩 Step 5: Save Docker image as tar file
+    # 🧩 Step 5: Save Docker Image as tar
     - name: Save Docker Image as tar
       run: docker save welcomeapi:latest -o welcomeapi.tar
 
-    # 🧩 Step 6: Deploy to EC2 Instance 1
-    - name: Deploy to EC2 Instance 1 (welcomeapi1)
+    # 🧩 Step 6: Copy Image and K8s Files to EC2 (Master Node)
+    - name: Transfer Image and YAML to EC2 (Master Node)
       env:
-        HOST: ${{ secrets.EC2_HOST }}
-        KEY: ${{ secrets.EC2_SSH_KEY }}
+        HOST: ${{ secrets.K8S_MASTER_HOST }}
+        KEY: ${{ secrets.K8S_MASTER_KEY }}
       run: |
         echo "$KEY" > key.pem
         chmod 600 key.pem
-
-        echo "----- 📦 Transferring Docker image to EC2 #1 -----"
         scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
+        scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
 
-        echo "----- 🔐 Connecting to EC2 #1 and deploying -----"
+    # 🧩 Step 7: Deploy on Kubernetes Cluster
+    - name: Deploy on Kubernetes (EC2 Master)
+      env:
+        HOST: ${{ secrets.K8S_MASTER_HOST }}
+        KEY: ${{ secrets.K8S_MASTER_KEY }}
+      run: |
+        echo "$KEY" > key.pem
+        chmod 600 key.pem
         ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
         set -e
-        echo "===== 🚀 Deploying on EC2 Instance 1 ====="
+        echo "===== 🚀 Deploying to Kubernetes Cluster ====="
 
-        # 🐳 Ensure Docker is installed
-        if ! command -v docker &> /dev/null; then
-          sudo dnf update -y
-          sudo dnf install -y docker
-          sudo systemctl enable docker
-          sudo systemctl start docker
-          sudo usermod -aG docker ec2-user
-        else
-          sudo systemctl start docker
-        fi
-
-        # 🧹 Stop and remove old container
-        if [ "$(sudo docker ps -aq -f name=welcomeapi1)" ]; then
-          sudo docker stop welcomeapi1 || true
-          sudo docker rm welcomeapi1 || true
-        fi
-
-        # 🧽 Cleanup old Docker data
-        sudo docker system prune -af || true
-
-        # 📦 Load new image
+        # 🐳 Load image into local Docker (on master node)
         sudo docker load -i /home/ec2-user/welcomeapi.tar
 
-        # 🏃 Run new container on port 8080→8082
-        sudo docker run -d -p 8080:8082 --name welcomeapi1 welcomeapi:latest
+        # 📦 Import image into Kubernetes nodes (requires Docker runtime)
+        IMAGE_ID=$(sudo docker images -q welcomeapi:latest)
+        sudo nerdctl --namespace k8s.io load -i /home/ec2-user/welcomeapi.tar || true
 
+        # 🧩 Apply Deployment
+        kubectl apply -f /home/ec2-user/k8s-deployment.yaml
+
+        # 🔄 Wait for rollout
+        kubectl rollout status deployment/welcomeapi-deployment
+
+        # 🧹 Clean up
         rm -f /home/ec2-user/welcomeapi.tar
-        echo "===== ✅ EC2 Instance 1 Deployed Successfully ====="
-        EOF
-
-    # 🧩 Step 7: Deploy to EC2 Instance 2
-    - name: Deploy to EC2 Instance 2 (welcomeapi2)
-      env:
-        HOST: ${{ secrets.EC2_HOST_2 }}
-        KEY: ${{ secrets.EC2_SSH_KEY_2 }}
-      run: |
-        echo "$KEY" > key2.pem
-        chmod 600 key2.pem
-
-        echo "----- 📦 Transferring Docker image to EC2 #2 -----"
-        scp -o StrictHostKeyChecking=no -i key2.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
-
-        echo "----- 🔐 Connecting to EC2 #2 and deploying -----"
-        ssh -o StrictHostKeyChecking=no -i key2.pem ec2-user@$HOST << 'EOF'
-        set -e
-        echo "===== 🚀 Deploying on EC2 Instance 2 ====="
-
-        # 🐳 Ensure Docker is installed
-        if ! command -v docker &> /dev/null; then
-          sudo dnf update -y
-          sudo dnf install -y docker
-          sudo systemctl enable docker
-          sudo systemctl start docker
-          sudo usermod -aG docker ec2-user
-        else
-          sudo systemctl start docker
-        fi
-
-        # 🧹 Stop and remove old container
-        if [ "$(sudo docker ps -aq -f name=welcomeapi2)" ]; then
-          sudo docker stop welcomeapi2 || true
-          sudo docker rm welcomeapi2 || true
-        fi
-
-        # 🧽 Cleanup old Docker data
-        sudo docker system prune -af || true
-
-        # 📦 Load new image
-        sudo docker load -i /home/ec2-user/welcomeapi.tar
-
-        # 🏃 Run new container on port 8081→8082
-        sudo docker run -d -p 8081:8082 --name welcomeapi2 welcomeapi:latest
-
-        rm -f /home/ec2-user/welcomeapi.tar
-        echo "===== ✅ EC2 Instance 2 Deployed Successfully ====="
+        echo "===== ✅ Deployment Successful ====="
         EOF
