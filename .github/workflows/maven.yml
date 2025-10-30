@@ -1,4 +1,4 @@
-name: Build, Test, and Deploy to Kubernetes on EC2
+name: Build, Test, and Deploy to Kubernetes on EC2 (Full Setup)
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
         scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
         scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
 
-    - name: Deploy on Kubernetes Cluster
+    - name: Install and Deploy Kubernetes Cluster on EC2
       env:
         HOST: ${{ secrets.K8S_MASTER_HOST }}
         KEY: ${{ secrets.K8S_MASTER_KEY }}
@@ -47,20 +47,79 @@ jobs:
         chmod 600 key.pem
         ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
         set -e
-        echo "===== 🚀 Deploying to Kubernetes Cluster ====="
+        echo "===== ⚙️ Setting up Kubernetes Cluster ====="
 
-        # Load Docker image to the master node
+        # -----------------------------
+        # Step 1: Install Dependencies
+        # -----------------------------
+        sudo yum update -y
+        sudo yum install -y docker git curl wget
+        sudo systemctl enable docker
+        sudo systemctl start docker
+
+        # Disable swap (required for kubeadm)
+        sudo swapoff -a
+        sudo sed -i '/swap/d' /etc/fstab
+
+        # -----------------------------
+        # Step 2: Install Kubernetes
+        # -----------------------------
+        if ! command -v kubeadm &> /dev/null
+        then
+          echo "Installing Kubernetes..."
+          sudo bash -c 'cat <<EOF2 > /etc/yum.repos.d/kubernetes.repo
+        [kubernetes]
+        name=Kubernetes
+        baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
+        enabled=1
+        gpgcheck=0
+        repo_gpgcheck=0
+        EOF2'
+
+          sudo yum install -y kubelet kubeadm kubectl
+          sudo systemctl enable kubelet
+        else
+          echo "Kubernetes already installed, skipping..."
+        fi
+
+        # -----------------------------
+        # Step 3: Initialize Cluster
+        # -----------------------------
+        if [ ! -f /etc/kubernetes/admin.conf ]; then
+          echo "Initializing Kubernetes control plane..."
+          sudo kubeadm reset -f || true
+          sudo kubeadm init --pod-network-cidr=192.168.0.0/16
+          mkdir -p $HOME/.kube
+          sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+          sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+          # Apply Calico CNI network
+          kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+        else
+          echo "Kubernetes already initialized."
+          mkdir -p $HOME/.kube
+          sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+          sudo chown $(id -u):$(id -g) $HOME/.kube/config
+        fi
+
+        echo "===== ✅ Kubernetes Cluster Ready ====="
+        kubectl get nodes -o wide
+
+        # -----------------------------
+        # Step 4: Load and Deploy App
+        # -----------------------------
+        echo "Loading Docker image..."
         sudo docker load -i /home/ec2-user/welcomeapi.tar
 
-        # Apply Deployment YAML
+        echo "Applying Deployment..."
         kubectl apply -f /home/ec2-user/k8s-deployment.yaml
 
-        # Wait for rollout to finish
+        echo "Waiting for rollout..."
         kubectl rollout status deployment/welcomeapi-deployment --timeout=120s
 
-        # Display status
+        echo "Deployment and Service Status:"
         kubectl get pods -o wide
         kubectl get svc welcomeapi-service
 
-        echo "===== ✅ Deployment Successful ====="
+        echo "===== 🚀 Deployment Complete ====="
         EOF
