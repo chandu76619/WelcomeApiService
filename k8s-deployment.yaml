@@ -16,8 +16,8 @@ spec:
         - name: welcomeapi
           image: welcomeapi:latest
           ports:
-            - containerPort: 8082
-          imagePullPolicy: Never  # 👈 Important (uses local image, not from registry)
+            - containerPort: 8082   # ✅ Match your app's actual port
+          imagePullPolicy: Never     # ✅ Use local image
 ---
 apiVersion: v1
 kind: Service
@@ -30,5 +30,5 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 8082
+      targetPort: 8082               # ✅ Match container port
       nodePort: 30080
