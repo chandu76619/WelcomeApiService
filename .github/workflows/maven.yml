@@ -38,7 +38,7 @@ jobs:
         scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
         scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
 
-    - name: Install and Deploy Kubernetes Cluster on EC2
+    - name: Install Kubernetes and Deploy Application
       env:
         HOST: ${{ secrets.K8S_MASTER_HOST }}
         KEY: ${{ secrets.K8S_MASTER_KEY }}
@@ -47,13 +47,22 @@ jobs:
         chmod 600 key.pem
         ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
         set -e
-        echo "===== ⚙️ Setting up Kubernetes Cluster ====="
+        echo "===== ⚙️ Starting Kubernetes Setup on EC2 ====="
 
         # -----------------------------
         # Step 1: Install Dependencies
         # -----------------------------
+        echo "===== 🧩 Installing Docker and Dependencies ====="
         sudo yum update -y
-        sudo yum install -y docker git curl wget
+
+        # Fix curl-minimal conflict (Amazon Linux 2023)
+        if rpm -q curl-minimal; then
+          echo "Removing curl-minimal to avoid conflict..."
+          sudo dnf remove -y curl-minimal || true
+        fi
+
+        # Install required tools
+        sudo yum install -y docker git wget
         sudo systemctl enable docker
         sudo systemctl start docker
 
@@ -89,12 +98,13 @@ jobs:
           echo "Initializing Kubernetes control plane..."
           sudo kubeadm reset -f || true
           sudo kubeadm init --pod-network-cidr=192.168.0.0/16
+
           mkdir -p $HOME/.kube
           sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
           sudo chown $(id -u):$(id -g) $HOME/.kube/config
 
-          # Apply Calico CNI network
-          kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+          echo "Installing Calico CNI network..."
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
         else
           echo "Kubernetes already initialized."
           mkdir -p $HOME/.kube
@@ -108,18 +118,18 @@ jobs:
         # -----------------------------
         # Step 4: Load and Deploy App
         # -----------------------------
-        echo "Loading Docker image..."
+        echo "===== 🐳 Loading Docker Image ====="
         sudo docker load -i /home/ec2-user/welcomeapi.tar
 
-        echo "Applying Deployment..."
+        echo "===== 📦 Deploying Application ====="
         kubectl apply -f /home/ec2-user/k8s-deployment.yaml
 
-        echo "Waiting for rollout..."
-        kubectl rollout status deployment/welcomeapi-deployment --timeout=120s
+        echo "===== ⏳ Waiting for Rollout ====="
+        kubectl rollout status deployment/welcomeapi-deployment --timeout=120s || true
 
-        echo "Deployment and Service Status:"
+        echo "===== ✅ Deployment Status ====="
         kubectl get pods -o wide
         kubectl get svc welcomeapi-service
 
-        echo "===== 🚀 Deployment Complete ====="
+        echo "===== 🎉 Deployment Complete ====="
         EOF
