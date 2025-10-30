@@ -2,8 +2,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: welcomeapi-deployment
+  labels:
+    app: welcomeapi
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: welcomeapi
@@ -14,10 +21,30 @@ spec:
     spec:
       containers:
         - name: welcomeapi
-          image: welcomeapi:latest
+          image: openjdk:17-jdk
+          command: ["java", "-jar", "/app/welcomeapi.jar"]
+          volumeMounts:
+            - name: app-jar
+              mountPath: /app
           ports:
-            - containerPort: 8082   # ✅ Match your app's actual port
-          imagePullPolicy: Never     # ✅ Use local image
+            - containerPort: 8082
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: app-jar
+          hostPath:
+            path: /opt/welcomeapi
+            type: Directory
 ---
 apiVersion: v1
 kind: Service
@@ -30,5 +57,5 @@ spec:
   ports:
     - protocol: TCP
       port: 80
-      targetPort: 8082               # ✅ Match container port
+      targetPort: 8082
       nodePort: 30080
