@@ -21,11 +21,9 @@ spec:
     spec:
       containers:
         - name: welcomeapi
-          image: openjdk:17-jdk
+          image: welcomeapi:latest
+          imagePullPolicy: IfNotPresent
           command: ["java", "-jar", "/app/welcomeapi.jar"]
-          volumeMounts:
-            - name: app-jar
-              mountPath: /app
           ports:
             - containerPort: 8082
           readinessProbe:
@@ -40,11 +38,6 @@ spec:
               port: 8082
             initialDelaySeconds: 15
             periodSeconds: 10
-      volumes:
-        - name: app-jar
-          hostPath:
-            path: /opt/welcomeapi
-            type: Directory
 ---
 apiVersion: v1
 kind: Service
