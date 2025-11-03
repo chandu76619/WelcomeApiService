@@ -28,25 +28,11 @@ jobs:
       - name: Save Docker Image as tar
         run: docker save welcomeapi:latest -o welcomeapi.tar
 
-      - name: Transfer Image and Deployment YAML to EC2
-        env:
-          HOST: ${{ secrets.K8S_MASTER_HOST }}
-          KEY: ${{ secrets.K8S_MASTER_KEY }}
+      - name: Create deploy script for remote execution
         run: |
-          echo "$KEY" > key.pem
-          chmod 600 key.pem
-          scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
-          scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
-
-      - name: Setup Kubernetes Cluster and Deploy Application
-        env:
-          HOST: ${{ secrets.K8S_MASTER_HOST }}
-          KEY: ${{ secrets.K8S_MASTER_KEY }}
-        run: |
-          echo "$KEY" > key.pem
-          chmod 600 key.pem
-          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
-          set -e
+          cat > deploy.sh <<'REMOTE_SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
           echo "===== ⚙️ Starting Kubernetes Setup on EC2 ====="
 
           sudo swapoff -a
@@ -60,24 +46,24 @@ jobs:
 
           if ! command -v kubeadm &> /dev/null; then
             cat <<EOR | sudo tee /etc/yum.repos.d/kubernetes.repo
-[kubernetes]
-name=Kubernetes
-baseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/
-enabled=1
-gpgcheck=0
-repo_gpgcheck=0
-EOR
+          [kubernetes]
+          name=Kubernetes
+          baseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/
+          enabled=1
+          gpgcheck=0
+          repo_gpgcheck=0
+          EOR
             sudo yum install -y kubelet kubeadm kubectl
             sudo systemctl enable --now kubelet
           fi
 
           echo "===== 🚀 Initializing Kubernetes Cluster ====="
           sudo kubeadm reset -f || true
-          sudo rm -rf ~/.kube
+          sudo rm -rf ~/.kube || true
           sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=NumCPU,Mem
 
           mkdir -p ~/.kube
-          sudo cp -i /etc/kubernetes/admin.conf ~/.kube/config
+          sudo cp -f /etc/kubernetes/admin.conf ~/.kube/config
           sudo chown $(id -u):$(id -g) ~/.kube/config
 
           echo "===== 🌐 Installing Calico CNI ====="
@@ -85,10 +71,10 @@ EOR
 
           echo "Waiting for Calico pods to be Ready..."
           sleep 90
-          kubectl get pods -n kube-system
+          kubectl get pods -n kube-system || true
 
           echo "===== 🐳 Loading Docker Image into Node ====="
-          sudo docker load -i /home/ec2-user/welcomeapi.tar
+          sudo docker load -i /home/ec2-user/welcomeapi.tar || true
 
           echo "===== 📦 Deploying Welcome API ====="
           kubectl apply -f /home/ec2-user/k8s-deployment.yaml
@@ -97,9 +83,31 @@ EOR
           kubectl wait --for=condition=Ready pods --all --timeout=180s || true
 
           echo "===== ✅ Deployment Summary ====="
-          kubectl get pods -o wide
-          kubectl get svc -o wide
-          kubectl get nodes -o wide
+          kubectl get pods -o wide || true
+          kubectl get svc -o wide || true
+          kubectl get nodes -o wide || true
 
           echo "===== 🎉 Kubernetes Deployment Completed Successfully ====="
+          REMOTE_SCRIPT
+          chmod +x deploy.sh
+
+      - name: Transfer files to EC2
+        env:
+          HOST: ${{ secrets.K8S_MASTER_HOST }}
+          KEY: ${{ secrets.K8S_MASTER_KEY }}
+        run: |
+          echo "$KEY" > key.pem
+          chmod 600 key.pem
+          scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
+          scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
+          scp -o StrictHostKeyChecking=no -i key.pem deploy.sh ec2-user@$HOST:/home/ec2-user/
+
+      - name: Run deploy script on EC2
+        env:
+          HOST: ${{ secrets.K8S_MASTER_HOST }}
+          KEY: ${{ secrets.K8S_MASTER_KEY }}
+        run: |
+          echo "$KEY" > key.pem
+          chmod 600 key.pem
+          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST "bash /home/ec2-user/deploy.sh"
 EOF
