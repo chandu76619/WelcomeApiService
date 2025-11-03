@@ -2,8 +2,7 @@ name: Build, Test, and Deploy to Kubernetes on EC2 (Full Setup)
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
 
 jobs:
   build:
@@ -54,18 +53,19 @@ jobs:
 
           echo "===== 🧩 Installing Docker and Kubernetes ====="
           sudo yum update -y
-          sudo yum install -y docker git wget curl
+          sudo yum remove -y curl-minimal || true
+          sudo yum install -y --allowerasing docker git wget curl
           sudo systemctl enable --now docker
 
           if ! command -v kubeadm &> /dev/null; then
             cat <<EOR | sudo tee /etc/yum.repos.d/kubernetes.repo
-          [kubernetes]
-          name=Kubernetes
-          baseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/
-          enabled=1
-          gpgcheck=0
-          repo_gpgcheck=0
-          EOR
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/
+enabled=1
+gpgcheck=0
+repo_gpgcheck=0
+EOR
             sudo yum install -y kubelet kubeadm kubectl
             sudo systemctl enable --now kubelet
           fi
@@ -101,4 +101,4 @@ jobs:
           kubectl get nodes -o wide
 
           echo "===== 🎉 Kubernetes Deployment Completed Successfully ====="
-          EOF
+EOF
