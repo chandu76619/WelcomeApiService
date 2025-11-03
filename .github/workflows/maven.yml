@@ -1,106 +1,104 @@
 name: Build, Test, and Deploy to Kubernetes on EC2 (Full Setup)
 
 on:
-push:
-branches:
-- main
+  push:
+    branches:
+      - main
 
 jobs:
-build:
-runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest
 
-```
-steps:
-  - name: Checkout Repository
-    uses: actions/checkout@v4
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-  - name: Set up JDK 17
-    uses: actions/setup-java@v4
-    with:
-      java-version: '17'
-      distribution: 'temurin'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-  - name: Build with Maven
-    run: mvn clean package -DskipTests
+      - name: Build with Maven
+        run: mvn clean package -DskipTests
 
-  - name: Build Docker Image
-    run: docker build -t welcomeapi:latest .
+      - name: Build Docker Image
+        run: docker build -t welcomeapi:latest .
 
-  - name: Save Docker Image as tar
-    run: docker save welcomeapi:latest -o welcomeapi.tar
+      - name: Save Docker Image as tar
+        run: docker save welcomeapi:latest -o welcomeapi.tar
 
-  - name: Transfer Image and Deployment YAML to EC2
-    env:
-      HOST: ${{ secrets.K8S_MASTER_HOST }}
-      KEY: ${{ secrets.K8S_MASTER_KEY }}
-    run: |
-      echo "$KEY" > key.pem
-      chmod 600 key.pem
-      scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
-      scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
+      - name: Transfer Image and Deployment YAML to EC2
+        env:
+          HOST: ${{ secrets.K8S_MASTER_HOST }}
+          KEY: ${{ secrets.K8S_MASTER_KEY }}
+        run: |
+          echo "$KEY" > key.pem
+          chmod 600 key.pem
+          scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
+          scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
 
-  - name: Setup Kubernetes Cluster and Deploy Application
-    env:
-      HOST: ${{ secrets.K8S_MASTER_HOST }}
-      KEY: ${{ secrets.K8S_MASTER_KEY }}
-    run: |
-      echo "$KEY" > key.pem
-      chmod 600 key.pem
-      ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
-      set -e
-      echo "===== ⚙️ Starting Kubernetes Setup on EC2 ====="
+      - name: Setup Kubernetes Cluster and Deploy Application
+        env:
+          HOST: ${{ secrets.K8S_MASTER_HOST }}
+          KEY: ${{ secrets.K8S_MASTER_KEY }}
+        run: |
+          echo "$KEY" > key.pem
+          chmod 600 key.pem
+          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
+          set -e
+          echo "===== ⚙️ Starting Kubernetes Setup on EC2 ====="
 
-      sudo swapoff -a
-      sudo sed -i '/swap/d' /etc/fstab
+          sudo swapoff -a
+          sudo sed -i '/swap/d' /etc/fstab
 
-      echo "===== 🧩 Installing Docker and Kubernetes ====="
-      sudo yum update -y
-      sudo yum install -y docker git wget curl
-      sudo systemctl enable --now docker
+          echo "===== 🧩 Installing Docker and Kubernetes ====="
+          sudo yum update -y
+          sudo yum install -y docker git wget curl
+          sudo systemctl enable --now docker
 
-      if ! command -v kubeadm &> /dev/null; then
-        cat <<EOR | sudo tee /etc/yum.repos.d/kubernetes.repo
-      [kubernetes]
-      name=Kubernetes
-      baseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/
-      enabled=1
-      gpgcheck=0
-      repo_gpgcheck=0
-      EOR
-        sudo yum install -y kubelet kubeadm kubectl
-        sudo systemctl enable --now kubelet
-      fi
+          if ! command -v kubeadm &> /dev/null; then
+            cat <<EOR | sudo tee /etc/yum.repos.d/kubernetes.repo
+          [kubernetes]
+          name=Kubernetes
+          baseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/
+          enabled=1
+          gpgcheck=0
+          repo_gpgcheck=0
+          EOR
+            sudo yum install -y kubelet kubeadm kubectl
+            sudo systemctl enable --now kubelet
+          fi
 
-      echo "===== 🚀 Initializing Kubernetes Cluster ====="
-      sudo kubeadm reset -f || true
-      sudo rm -rf ~/.kube
-      sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=NumCPU,Mem
+          echo "===== 🚀 Initializing Kubernetes Cluster ====="
+          sudo kubeadm reset -f || true
+          sudo rm -rf ~/.kube
+          sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --ignore-preflight-errors=NumCPU,Mem
 
-      mkdir -p ~/.kube
-      sudo cp -i /etc/kubernetes/admin.conf ~/.kube/config
-      sudo chown $(id -u):$(id -g) ~/.kube/config
+          mkdir -p ~/.kube
+          sudo cp -i /etc/kubernetes/admin.conf ~/.kube/config
+          sudo chown $(id -u):$(id -g) ~/.kube/config
 
-      echo "===== 🌐 Installing Calico CNI ====="
-      kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
+          echo "===== 🌐 Installing Calico CNI ====="
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
 
-      echo "Waiting for Calico pods to be Ready..."
-      sleep 90
-      kubectl get pods -n kube-system
+          echo "Waiting for Calico pods to be Ready..."
+          sleep 90
+          kubectl get pods -n kube-system
 
-      echo "===== 🐳 Loading Docker Image into Node ====="
-      sudo docker load -i /home/ec2-user/welcomeapi.tar
+          echo "===== 🐳 Loading Docker Image into Node ====="
+          sudo docker load -i /home/ec2-user/welcomeapi.tar
 
-      echo "===== 📦 Deploying Welcome API ====="
-      kubectl apply -f /home/ec2-user/k8s-deployment.yaml
+          echo "===== 📦 Deploying Welcome API ====="
+          kubectl apply -f /home/ec2-user/k8s-deployment.yaml
 
-      echo "===== ⏳ Waiting for Pods to be Ready ====="
-      kubectl wait --for=condition=Ready pods --all --timeout=180s || true
+          echo "===== ⏳ Waiting for Pods to be Ready ====="
+          kubectl wait --for=condition=Ready pods --all --timeout=180s || true
 
-      echo "===== ✅ Deployment Summary ====="
-      kubectl get pods -o wide
-      kubectl get svc -o wide
-      kubectl get nodes -o wide
+          echo "===== ✅ Deployment Summary ====="
+          kubectl get pods -o wide
+          kubectl get svc -o wide
+          kubectl get nodes -o wide
 
-      echo "===== 🎉 Kubernetes Deployment Completed Successfully ====="
-      EOF
-```
+          echo "===== 🎉 Kubernetes Deployment Completed Successfully ====="
+          EOF
