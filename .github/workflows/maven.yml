@@ -8,6 +8,7 @@ jobs:
 build:
 runs-on: ubuntu-latest
 
+```
 steps:
 - name: Checkout Repository
   uses: actions/checkout@v4
@@ -18,7 +19,7 @@ steps:
     java-version: '17'
     distribution: 'temurin'
 
-- name: Clean and Build with Maven
+- name: Build with Maven
   run: mvn clean package -DskipTests
 
 - name: Build Docker Image
@@ -27,7 +28,7 @@ steps:
 - name: Save Docker Image as tar
   run: docker save welcomeapi:latest -o welcomeapi.tar
 
-- name: Transfer Image and YAML to EC2
+- name: Transfer Image and Deployment YAML to EC2
   env:
     HOST: ${{ secrets.K8S_MASTER_HOST }}
     KEY: ${{ secrets.K8S_MASTER_KEY }}
@@ -37,7 +38,7 @@ steps:
     scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
     scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
 
-- name: Install Kubernetes, Initialize, and Deploy
+- name: Setup Kubernetes Cluster and Deploy Application
   env:
     HOST: ${{ secrets.K8S_MASTER_HOST }}
     KEY: ${{ secrets.K8S_MASTER_KEY }}
@@ -46,28 +47,27 @@ steps:
     chmod 600 key.pem
     ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
     set -e
-    echo "===== ⚙️ Setting up Kubernetes on EC2 ====="
+    echo "===== ⚙️ Starting Kubernetes Setup on EC2 ====="
 
     sudo swapoff -a
     sudo sed -i '/swap/d' /etc/fstab
 
     echo "===== 🧩 Installing Docker and Kubernetes ====="
     sudo yum update -y
-    sudo yum install -y docker git wget
+    sudo yum install -y docker git wget curl
     sudo systemctl enable --now docker
 
-    # Add Kubernetes repo and install components
     if ! command -v kubeadm &> /dev/null; then
       cat <<EOR | sudo tee /etc/yum.repos.d/kubernetes.repo
     [kubernetes]
     name=Kubernetes
-    baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
+    baseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/
     enabled=1
     gpgcheck=0
     repo_gpgcheck=0
     EOR
       sudo yum install -y kubelet kubeadm kubectl
-      sudo systemctl enable kubelet
+      sudo systemctl enable --now kubelet
     fi
 
     echo "===== 🚀 Initializing Kubernetes Cluster ====="
@@ -82,11 +82,11 @@ steps:
     echo "===== 🌐 Installing Calico CNI ====="
     kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
 
-    echo "Waiting for node to become Ready..."
-    sleep 60
-    kubectl get nodes -o wide
+    echo "Waiting for Calico pods to be Ready..."
+    sleep 90
+    kubectl get pods -n kube-system
 
-    echo "===== 🐳 Loading Docker Image ====="
+    echo "===== 🐳 Loading Docker Image into Node ====="
     sudo docker load -i /home/ec2-user/welcomeapi.tar
 
     echo "===== 📦 Deploying Welcome API ====="
@@ -98,7 +98,8 @@ steps:
     echo "===== ✅ Deployment Summary ====="
     kubectl get pods -o wide
     kubectl get svc -o wide
+    kubectl get nodes -o wide
 
-    echo "===== 🎉 Kubernetes Deployment Complete ====="
+    echo "===== 🎉 Kubernetes Deployment Completed Successfully ====="
     EOF
-
+```
