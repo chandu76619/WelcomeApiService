@@ -5,131 +5,140 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      # 🧩 Step 1: Checkout Code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      # 🧩 Step 2: Set up JDK 17
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-    - name: Clean and Build with Maven
-      run: |
-        mvn clean package -DskipTests
+      # 🧩 Step 3: Build with Maven
+      - name: Build Maven Project
+        run: mvn clean package -DskipTests
 
-    - name: Build Docker Image
-      run: docker build -t welcomeapi:latest .
+      # 🧩 Step 4: Build Docker Image
+      - name: Build Docker Image
+        run: docker build -t welcomeapi:latest .
 
-    - name: Save Docker Image as tar
-      run: docker save welcomeapi:latest -o welcomeapi.tar
+      # 🧩 Step 5: Save Docker Image as tar
+      - name: Save Docker Image as tar
+        run: docker save welcomeapi:latest -o welcomeapi.tar
 
-    - name: Transfer Image and YAML to EC2
-      env:
-        HOST: ${{ secrets.K8S_MASTER_HOST }}
-        KEY: ${{ secrets.K8S_MASTER_KEY }}
-      run: |
-        echo "$KEY" > key.pem
-        chmod 600 key.pem
-        scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
-        scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
+      # 🧩 Step 6: Transfer Image and YAML to EC2
+      - name: Transfer Files to EC2
+        env:
+          HOST: ${{ secrets.K8S_MASTER_HOST }}
+          KEY: ${{ secrets.K8S_MASTER_KEY }}
+        run: |
+          echo "$KEY" > key.pem
+          chmod 600 key.pem
+          scp -o StrictHostKeyChecking=no -i key.pem welcomeapi.tar ec2-user@$HOST:/home/ec2-user/
+          scp -o StrictHostKeyChecking=no -i key.pem k8s-deployment.yaml ec2-user@$HOST:/home/ec2-user/
 
-    - name: Install Kubernetes and Deploy Application
-      env:
-        HOST: ${{ secrets.K8S_MASTER_HOST }}
-        KEY: ${{ secrets.K8S_MASTER_KEY }}
-      run: |
-        echo "$KEY" > key.pem
-        chmod 600 key.pem
-        ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
-        set -e
-        echo "===== ⚙️ Starting Kubernetes Setup on EC2 ====="
+      # 🧩 Step 7: Install Kubernetes and Deploy Application
+      - name: Install Kubernetes and Deploy
+        env:
+          HOST: ${{ secrets.K8S_MASTER_HOST }}
+          KEY: ${{ secrets.K8S_MASTER_KEY }}
+        run: |
+          echo "$KEY" > key.pem
+          chmod 600 key.pem
 
-        # -----------------------------
-        # Step 1: Install Dependencies
-        # -----------------------------
-        echo "===== 🧩 Installing Docker and Dependencies ====="
-        sudo yum update -y
+          ssh -o StrictHostKeyChecking=no -i key.pem ec2-user@$HOST << 'EOF'
+          set -e
+          echo "===== ⚙️ Starting Kubernetes Setup on EC2 ====="
 
-        # Fix curl-minimal conflict (Amazon Linux 2023)
-        if rpm -q curl-minimal; then
-          echo "Removing curl-minimal to avoid conflict..."
-          sudo dnf remove -y curl-minimal || true
-        fi
+          # -----------------------------
+          # Step 1: Install Dependencies
+          # -----------------------------
+          echo "===== 🧩 Installing Docker and Dependencies ====="
+          sudo yum update -y
 
-        # Install required tools
-        sudo yum install -y docker git wget
-        sudo systemctl enable docker
-        sudo systemctl start docker
+          # Remove curl-minimal (Amazon Linux 2023)
+          if rpm -q curl-minimal >/dev/null 2>&1; then
+            echo "Removing curl-minimal to avoid conflicts..."
+            sudo dnf remove -y curl-minimal || true
+          fi
 
-        # Disable swap (required for kubeadm)
-        sudo swapoff -a
-        sudo sed -i '/swap/d' /etc/fstab
+          # Install tools
+          sudo yum install -y docker git wget
+          sudo systemctl enable docker
+          sudo systemctl start docker
 
-        # -----------------------------
-        # Step 2: Install Kubernetes
-        # -----------------------------
-        if ! command -v kubeadm &> /dev/null
-        then
-          echo "Installing Kubernetes..."
-          sudo bash -c 'cat <<EOF2 > /etc/yum.repos.d/kubernetes.repo
-        [kubernetes]
-        name=Kubernetes
-        baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
-        enabled=1
-        gpgcheck=0
-        repo_gpgcheck=0
-        EOF2'
+          # Disable swap
+          sudo swapoff -a
+          sudo sed -i '/swap/d' /etc/fstab
 
-          sudo yum install -y kubelet kubeadm kubectl
-          sudo systemctl enable kubelet
-        else
-          echo "Kubernetes already installed, skipping..."
-        fi
+          # -----------------------------
+          # Step 2: Install Kubernetes
+          # -----------------------------
+          if ! command -v kubeadm &> /dev/null; then
+            echo "Installing Kubernetes..."
+            sudo bash -c 'cat <<EOF2 > /etc/yum.repos.d/kubernetes.repo
+          [kubernetes]
+          name=Kubernetes
+          baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
+          enabled=1
+          gpgcheck=0
+          repo_gpgcheck=0
+          EOF2'
 
-        # -----------------------------
-        # Step 3: Initialize Cluster
-        # -----------------------------
-        if [ ! -f /etc/kubernetes/admin.conf ]; then
-          echo "Initializing Kubernetes control plane..."
-          sudo kubeadm reset -f || true
-          sudo kubeadm init --pod-network-cidr=192.168.0.0/16
+            sudo yum install -y kubelet kubeadm kubectl
+            sudo systemctl enable kubelet
+          else
+            echo "Kubernetes already installed, skipping..."
+          fi
 
-          mkdir -p $HOME/.kube
-          sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-          sudo chown $(id -u):$(id -g) $HOME/.kube/config
+          # -----------------------------
+          # Step 3: Initialize Cluster
+          # -----------------------------
+          if [ ! -f /etc/kubernetes/admin.conf ]; then
+            echo "Initializing Kubernetes control plane..."
+            sudo kubeadm reset -f || true
+            sudo kubeadm init --pod-network-cidr=192.168.0.0/16
 
-          echo "Installing Calico CNI network..."
-          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
-        else
-          echo "Kubernetes already initialized."
-          mkdir -p $HOME/.kube
-          sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-          sudo chown $(id -u):$(id -g) $HOME/.kube/config
-        fi
+            mkdir -p \$HOME/.kube
+            sudo cp -i /etc/kubernetes/admin.conf \$HOME/.kube/config
+            sudo chown \$(id -u):\$(id -g) \$HOME/.kube/config
 
-        echo "===== ✅ Kubernetes Cluster Ready ====="
-        kubectl get nodes -o wide
+            echo "Installing Calico CNI..."
+            kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
 
-        # -----------------------------
-        # Step 4: Load and Deploy App
-        # -----------------------------
-        echo "===== 🐳 Loading Docker Image ====="
-        sudo docker load -i /home/ec2-user/welcomeapi.tar
+            echo "Waiting for Calico to be ready..."
+            sleep 60
+          else
+            echo "Kubernetes already initialized. Updating kubeconfig..."
+            mkdir -p \$HOME/.kube
+            sudo cp -i /etc/kubernetes/admin.conf \$HOME/.kube/config
+            sudo chown \$(id -u):\$(id -g) \$HOME/.kube/config
+          fi
 
-        echo "===== 📦 Deploying Application ====="
-        kubectl apply -f /home/ec2-user/k8s-deployment.yaml
+          echo "===== ✅ Kubernetes Cluster Ready ====="
+          kubectl get nodes -o wide || true
 
-        echo "===== ⏳ Waiting for Rollout ====="
-        kubectl rollout status deployment/welcomeapi-deployment --timeout=120s || true
+          # -----------------------------
+          # Step 4: Deploy Application
+          # -----------------------------
+          echo "===== 🐳 Loading Docker Image ====="
+          sudo docker load -i /home/ec2-user/welcomeapi.tar
 
-        echo "===== ✅ Deployment Status ====="
-        kubectl get pods -o wide
-        kubectl get svc welcomeapi-service
+          echo "===== 📦 Applying Kubernetes YAML ====="
+          kubectl apply -f /home/ec2-user/k8s-deployment.yaml
 
-        echo "===== 🎉 Deployment Complete ====="
-        EOF
+          echo "===== ⏳ Waiting for Deployment ====="
+          kubectl rollout status deployment/welcomeapi-deployment --timeout=180s || true
+
+          echo "===== ✅ Deployment Completed ====="
+          kubectl get pods -o wide
+          kubectl get svc welcomeapi-service
+
+          echo "===== 🎉 All Done! ====="
+          EOF
