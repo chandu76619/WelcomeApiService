@@ -22,8 +22,7 @@ jobs:
 
       # 🧩 Step 3: Build with Maven
       - name: Clean and Build with Maven
-        run: |
-          mvn clean package -DskipTests
+        run: mvn clean package -DskipTests
 
       # 🧩 Step 4: Build Docker Image
       - name: Build Docker Image
@@ -57,73 +56,56 @@ jobs:
           set -e
           echo "===== ⚙️ Starting Kubernetes Setup on EC2 ====="
 
-          # -----------------------------
-          # Step 1: Install Docker and Dependencies
-          # -----------------------------
-          echo "===== 🧩 Installing Docker and Dependencies ====="
-          sudo yum update -y
-
-          if rpm -q curl-minimal; then
-            echo "Removing curl-minimal to avoid conflict..."
-            sudo dnf remove -y curl-minimal || true
-          fi
-
+          # Step 1: Docker setup
+          echo "===== 🧩 Installing Docker ====="
           sudo yum install -y docker git wget
-          sudo systemctl enable docker
-          sudo systemctl start docker
+          sudo systemctl enable docker --now
 
-          # Disable swap (required for kubeadm)
+          # Step 2: Disable swap (k8s requirement)
           sudo swapoff -a
           sudo sed -i '/swap/d' /etc/fstab
 
-          # -----------------------------
-          # Step 2: Install Kubernetes
-          # -----------------------------
+          # Step 3: Install Kubernetes if not installed
           if ! command -v kubeadm &> /dev/null
           then
             echo "Installing Kubernetes..."
-            sudo bash -c 'cat <<EOF2 > /etc/yum.repos.d/kubernetes.repo
+            cat <<EOF2 | sudo tee /etc/yum.repos.d/kubernetes.repo
           [kubernetes]
           name=Kubernetes
           baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-\$basearch
           enabled=1
           gpgcheck=0
           repo_gpgcheck=0
-          EOF2'
-
+          EOF2
             sudo yum install -y kubelet kubeadm kubectl
             sudo systemctl enable kubelet
-          else
-            echo "Kubernetes already installed, skipping..."
           fi
 
-          # -----------------------------
-          # Step 3: Initialize Cluster
-          # -----------------------------
+          # Step 4: Initialize cluster if not already done
           if [ ! -f /etc/kubernetes/admin.conf ]; then
-            echo "Initializing Kubernetes control plane..."
+            echo "Initializing Kubernetes cluster..."
             sudo kubeadm reset -f || true
+            sudo systemctl restart kubelet
+            sudo systemctl restart docker
             sudo kubeadm init --pod-network-cidr=192.168.0.0/16
 
-            mkdir -p $HOME/.kube
-            sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-            sudo chown $(id -u):$(id -g) $HOME/.kube/config
+            mkdir -p \$HOME/.kube
+            sudo cp -i /etc/kubernetes/admin.conf \$HOME/.kube/config
+            sudo chown \$(id -u):\$(id -g) \$HOME/.kube/config
 
-            echo "Installing Calico CNI network..."
+            echo "Installing Calico network..."
             kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
           else
-            echo "Kubernetes already initialized."
-            mkdir -p $HOME/.kube
-            sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-            sudo chown $(id -u):$(id -g) $HOME/.kube/config
+            echo "Kubernetes already initialized, reloading kubeconfig..."
+            mkdir -p \$HOME/.kube
+            sudo cp -i /etc/kubernetes/admin.conf \$HOME/.kube/config
+            sudo chown \$(id -u):\$(id -g) \$HOME/.kube/config
           fi
 
-          echo "===== ✅ Kubernetes Cluster Ready ====="
+          echo "===== ✅ Kubernetes Ready ====="
           kubectl get nodes -o wide
 
-          # -----------------------------
-          # Step 4: Load and Deploy App
-          # -----------------------------
+          # Step 5: Load and Deploy app
           echo "===== 🐳 Loading Docker Image ====="
           sudo docker load -i /home/ec2-user/welcomeapi.tar
 
@@ -133,7 +115,7 @@ jobs:
           echo "===== ⏳ Waiting for Rollout ====="
           kubectl rollout status deployment/welcomeapi-deployment --timeout=120s || true
 
-          echo "===== ✅ Deployment Status ====="
+          echo "===== ✅ Current Pods ====="
           kubectl get pods -o wide
           kubectl get svc welcomeapi-service
 
