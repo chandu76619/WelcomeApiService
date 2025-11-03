@@ -3,7 +3,7 @@ name: Build, Test, and Deploy to Kubernetes on EC2 (Full Setup)
 on:
   push:
     branches: [ "main" ]
-
+    
 jobs:
   build:
     runs-on: ubuntu-latest
