@@ -8,7 +8,6 @@ jobs:
 build:
 runs-on: ubuntu-latest
 
-```
 steps:
 - name: Checkout Repository
   uses: actions/checkout@v4
@@ -102,4 +101,4 @@ steps:
 
     echo "===== 🎉 Kubernetes Deployment Complete ====="
     EOF
-```
+
