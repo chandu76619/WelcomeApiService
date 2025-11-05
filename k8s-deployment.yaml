@@ -1,5 +1,33 @@
-containers:
-  - name: welcomeapi
-    image: IMAGE_PLACEHOLDER
-    ports:
-      - containerPort: 8082
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: welcomeapi-deployment
+  labels:
+    app: welcomeapi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: welcomeapi
+  template:
+    metadata:
+      labels:
+        app: welcomeapi
+    spec:
+      containers:
+        - name: welcomeapi
+          image: 590183934157.dkr.ecr.us-east-1.amazonaws.com/welcomeapi:latest
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: welcomeapi-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: welcomeapi
+  ports:
+    - port: 80
+      targetPort: 8080
