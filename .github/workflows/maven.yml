@@ -1,62 +1,70 @@
-name: Build, Push to ECR, and Deploy to EKS
+name: Build, Push, and Deploy to EKS
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: welcomeapi
+  CLUSTER_NAME: ashokit-cluster4
+  DEPLOYMENT_NAME: welcomeapi-deployment
+  SERVICE_NAME: welcomeapi-service
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: 🧩 Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: 🧩 Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          distribution: temurin
+          java-version: 17
 
-      - name: Build JAR with Maven
+      - name: 🧩 Build with Maven
         run: mvn clean package -DskipTests
 
-      - name: Configure AWS credentials
+      - name: 🧩 Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Log in to Amazon ECR
+      - name: 🧩 Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to ECR
+      - name: 🧩 Build and Push Docker Image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: welcomeapi
           IMAGE_TAG: latest
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
 
-      - name: Deploy to EKS
+      - name: 🧩 Update kubeconfig for EKS
+        run: aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+
+      - name: 🧩 Deploy to EKS
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: welcomeapi
           IMAGE_TAG: latest
         run: |
-          echo "===== 🧩 Setting up EKS access ====="
-          aws eks update-kubeconfig --region us-east-1 --name ashokit-cluster4
+          echo "===== Updating image in YAML ====="
+          sed -i "s|IMAGE_PLACEHOLDER|$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG|g" k8s-deployment.yaml
           
-          echo "===== 📦 Updating image in YAML ====="
-          sed -i "s|IMAGE_PLACEHOLDER|$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s-deployment.yaml
-          
-          echo "===== 🚀 Deploying to EKS ====="
+          echo "===== Applying manifests ====="
           kubectl apply -f k8s-deployment.yaml --validate=false
           
-          echo "===== ⏳ Checking rollout ====="
-          kubectl rollout status deployment/welcomeapi-deployment --timeout=120s || true
+          echo "===== Checking rollout ====="
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} --timeout=180s || true
           
           echo "===== ✅ Deployment complete ====="
+          kubectl get pods -o wide
+          kubectl get svc ${{ env.SERVICE_NAME }}
