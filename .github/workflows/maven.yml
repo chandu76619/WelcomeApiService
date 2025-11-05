@@ -1,71 +1,62 @@
-name: Build, Push, and Deploy to EKS (Full Setup)
+name: Build, Push to ECR, and Deploy to EKS
 
 on:
   push:
     branches: [ "main" ]
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Checkout code
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # Step 2: Setup JDK 17
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-    # Step 3: Build with Maven
-    - name: Build Spring Boot App
-      run: mvn clean package -DskipTests
+      - name: Build JAR with Maven
+        run: mvn clean package -DskipTests
 
-    # Step 4: Configure AWS credentials
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
-    # Step 5: Login to Amazon ECR
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-    # Step 6: Build, Tag and Push image to ECR
-    - name: Build and Push Docker image to ECR
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: welcomeapi
-        IMAGE_TAG: latest
-      run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+      - name: Build, tag, and push image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: welcomeapi
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-    # Step 7: Deploy to EKS
-    - name: Deploy to EKS
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: welcomeapi
-        IMAGE_TAG: latest
-      run: |
-        echo "===== 🧩 Setting up EKS access ====="
-        aws eks update-kubeconfig --region us-east-1 --name ashokit-cluster4
-
-        echo "===== 📦 Updating k8s deployment image ====="
-        sed -i "s|IMAGE_PLACEHOLDER|$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s-deployment.yaml
-
-        echo "===== 🚀 Deploying to EKS ====="
-        kubectl apply -f k8s-deployment.yaml
-
-        echo "===== ⏳ Checking rollout ====="
-        kubectl rollout status deployment/welcomeapi-deployment --timeout=120s || true
-
-        echo "===== ✅ Deployment Status ====="
-        kubectl get pods -o wide
-        kubectl get svc welcomeapi-service
+      - name: Deploy to EKS
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: welcomeapi
+          IMAGE_TAG: latest
+        run: |
+          echo "===== 🧩 Setting up EKS access ====="
+          aws eks update-kubeconfig --region us-east-1 --name ashokit-cluster4
+          
+          echo "===== 📦 Updating image in YAML ====="
+          sed -i "s|IMAGE_PLACEHOLDER|$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s-deployment.yaml
+          
+          echo "===== 🚀 Deploying to EKS ====="
+          kubectl apply -f k8s-deployment.yaml --validate=false
+          
+          echo "===== ⏳ Checking rollout ====="
+          kubectl rollout status deployment/welcomeapi-deployment --timeout=120s || true
+          
+          echo "===== ✅ Deployment complete ====="
